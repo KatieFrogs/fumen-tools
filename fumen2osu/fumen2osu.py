@@ -1,118 +1,186 @@
-import os, sys, struct
+import os, sys, struct, argparse, io
 
-fumen2osu_version = "v1.0"
-usage = """fumen2osu {0}
-py {1} file_m.bin [offset] [/title "Title"] [/wave file.wav] [/debug]
+fumen2osu_version = "v1.1"
 
-file_m.bin       Path to Taiko no Tatsujin fumen file.
-offset           Note offset in seconds, negative values will make the notes
-                 appear later. Example: -1.9
-/title "Title"   Set the title in the output file.
-/wave file.wav   Set the audio filename in the output file.
-/debug           Print verbose debug information."""
+branchNames = ("normal", "advanced", "master")
 
-def readFumen(filename, globalOffset=0, title="", wave="", debug=False):
-	if not os.path.isfile(filename):
-		print("Error: Cannot find file {0}".format(filename))
-		return
+def readFumen(inputFile, byteOrder=None, debug=False):
+	if type(inputFile) is str:
+		file = open(inputFile, "rb")
+	else:
+		file = inputFile
+	size = os.fstat(file.fileno()).st_size
 	
-	try:
-		globalOffset = float(globalOffset) * 1000.0
-	except ValueError:
-		print("Error: Could not convert offset {0} to float".format(globalOffset))
-		return
+	noteTypes = {
+		0x1: "Don", # ドン
+		0x2: "Don", # ド
+		0x3: "Don", # コ
+		0x4: "Ka", # カッ
+		0x5: "Ka", # カ
+		0x6: "Drumroll",
+		0x7: "DON",
+		0x8: "KA",
+		0x9: "DRUMROLL",
+		0xa: "Balloon",
+		0xb: "DON", # hands
+		0xc: "Kusudama",
+		0xd: "KA", # hands
+		0x62: "Drumroll" # ?
+	}
+	song = {}
+	songOffset = 0
 	
-	filenameNoExt = os.path.splitext(filename)[0]
+	def readStruct(format, seek=None):
+		if seek:
+			file.seek(seek)
+		return struct.unpack(order + format, file.read(struct.calcsize(order + format)))
 	
-	with open(filename, "rb") as file:
-		size = os.fstat(file.fileno()).st_size
-		noteTypes = {
-			0x1: "Don", # ドン
-			0x2: "Don", # ド
-			0x3: "Don", # コ
-			0x4: "Ka", # カッ
-			0x5: "Ka", # カ
-			0x6: "Drumroll",
-			0x7: "DON",
-			0x8: "KA",
-			0x9: "DRUMROLL",
-			0xa: "Balloon",
-			0xb: "DON", # hands
-			0xc: "Kusudama",
-			0xd: "KA" # hands
-		}
-		start = 0x208
-		scoreInit = 0
-		scoreDiff = 0
-		totalBars = readByte(file, 0x200, 4, "int")
-		bars = []
-		if debug:
-			print("Total bars: {0}".format(totalBars))
+	if byteOrder:
+		order = ">" if byteOrder == "big" else "<"
+		totalMeasures = readStruct("I", 0x200)[0]
+	else:
+		order = ""
+		measuresBig = readStruct(">I", 0x200)[0]
+		measuresLittle = readStruct("<I", 0x200)[0]
+		if measuresBig < measuresLittle:
+			order = ">"
+			totalMeasures = measuresBig
+		else:
+			order = "<"
+			totalMeasures = measuresLittle
+	
+	hasBranches = getBool(readStruct("B", 0x1b0)[0])
+	song["branches"] = hasBranches
+	if debug:
+		debugPrint("Total measures: {0}, {1} branches, {2}-endian".format(
+			totalMeasures,
+			"has" if hasBranches else "no",
+			"Big" if order == ">" else "Little"
+		))
+	
+	file.seek(0x208)
+	for measureNumber in range(totalMeasures):
+		measure = {}
+		# measureStruct: bpm 4, offset 4, gogo 1, hidden 1, dummy 2, branchInfo 4 * 6, dummy 4
+		measureStruct = readStruct("ffBBHiiiiiii")
+		measure["bpm"] = measureStruct[0]
+		if not songOffset:
+			songOffset = 240000 / measure["bpm"]
+		measure["offset"] = measureStruct[1] + songOffset
+		measure["gogo"] = getBool(measureStruct[2])
+		measure["hidden"] = getBool(measureStruct[3])
 		
-		for barNumber in range(totalBars):
-			bar = {}
-			# barStruct: bpm 4, offset 4, gogo 1, hidden 1, dummy 2, branches 4 * 6, dummy 4, totalNotes 2, dummy 2, speed 4
-			barStruct = struct.unpack(">ffBBHiiiiiiiHHf", readByte(file, start, 0x30))
-			bar["bpm"] = barStruct[0]
-			bar["offset"] = barStruct[1]
-			gogo = barStruct[2]
-			bar["gogo"] = True if gogo == 1 else False if gogo == 0 else gogo
-			hiddenBar = barStruct[3]
-			bar["hiddenBar"] = True if hiddenBar == 1 else False if hiddenBar == 0 else hiddenBar
-			totalNotes = barStruct[12]
-			bar["speed"] = barStruct[14]
+		for branchNumber in range(3):
+			branch = {}
+			# branchStruct: totalNotes 2, dummy 2, speed 4
+			branchStruct = readStruct("HHf")
+			totalNotes = branchStruct[0]
+			branch["speed"] = branchStruct[2]
 			
-			if debug:
-				print("")
-				print("Bar #{0} at {1}-{2} ({3})".format(barNumber, shortHex(start), shortHex(start + 0x3f + 0x18 * totalNotes), nameValue(bar)))
-				print("Total notes: {0}".format(totalNotes))
+			if debug and (hasBranches or branchNumber == 0 or totalNotes != 0):
+				branchName = " ({0})".format(
+					branchNames[branchNumber]
+				) if hasBranches or branchNumber != 0 else ""
+				fileOffset = file.tell()
+				debugPrint("")
+				debugPrint("Measure #{0}{1} at {2}-{3} ({4})".format(
+					measureNumber + 1,
+					branchName,
+					shortHex(fileOffset - 0x8),
+					shortHex(fileOffset + 0x18 * totalNotes),
+					nameValue(measure, branch)
+				))
+				debugPrint("Total notes: {0}".format(totalNotes))
 			
-			start += 0x30
-			
-			for barIndex in range(totalNotes):
+			for noteNumber in range(totalNotes):
 				if debug:
-					print("Note #{0} at {1}-{2}".format(barIndex, shortHex(start), shortHex(start + 0x17)), end="")
+					fileOffset = file.tell()
+					debugPrint("Note #{0} at {1}-{2}".format(
+						noteNumber + 1,
+						shortHex(fileOffset),
+						shortHex(fileOffset + 0x17)
+					), end="")
+				
 				note = {}
-				# noteStruct: type 4, pos 4, dummy 8, init 2, diff 2, length 4
-				noteStruct = struct.unpack(">ifQHHf", readByte(file, start, 0x18))
-				type = noteStruct[0]
-				if not type in noteTypes:
+				# noteStruct: type 4, pos 4, item 4, dummy 4, init 2, diff 2, duration 4
+				noteStruct = readStruct("ififHHf")
+				noteType = noteStruct[0]
+				
+				if noteType not in noteTypes:
 					if debug:
-						print("")
-					print("Error: Unknown note type '{0}' at offset {1}".format(shortHex(type).upper(), hex(start)))
-					return
-				note["type"] = noteTypes[type]
+						debugPrint("")
+					debugPrint("Error: Unknown note type '{0}' at offset {1}".format(
+						shortHex(noteType).upper(),
+						hex(file.tell() - 0x18))
+					)
+					return False
+				
+				note["type"] = noteTypes[noteType]
 				note["pos"] = noteStruct[1]
-				if type == 10 or type == 12:
-					note["hits"] = noteStruct[3]
-				elif not scoreInit:
-					scoreInit = noteStruct[3]
-					scoreDiff = noteStruct[4]
-				if type == 6 or type == 9 or type == 10 or type == 12:
-					note["length"] = noteStruct[5]
-				bar[barIndex] = note
+				
+				if noteType == 0xa or noteType == 0xc:
+					# Balloon hits
+					note["hits"] = noteStruct[4]
+				elif "scoreInit" not in song:
+					song["scoreInit"] = noteStruct[4]
+					song["scoreDiff"] = noteStruct[5] / 4.0
+				
+				if noteType == 0x6 or noteType == 0x9 or noteType == 0xa or noteType == 0xc:
+					# Drumroll and balloon duration in ms
+					note["duration"] = noteStruct[6]
+				branch[noteNumber] = note
+				
 				if debug:
-					print(" ({0})".format(nameValue(note)))
-				start += 0x20 if type == 6 or type == 9 else 0x18
-			bar["length"] = totalNotes
-			bars.append(bar)
+					debugPrint(" ({0})".format(nameValue(note)))
+				
+				if noteType == 0x6 or noteType == 0x9 or noteType == 0x62:
+					# Drumrolls have 8 dummy bytes at the end
+					file.seek(0x8, os.SEEK_CUR)
 			
-			start += 0x10
-			if start >= size:
-				break
+			branch["length"] = totalNotes
+			measure[branchNames[branchNumber]] = branch
+		
+		song[measureNumber] = measure
+		if file.tell() >= size:
+			break
 	
-	if len(bars) == 0:
-		return
+	song["length"] = totalMeasures
+	
+	file.close()
+	return song
+
+def writeOsu(song, globalOffset=0, title=None, subtitle="", wave=None, selectedBranch=None, outputFile=None, inputFile=None):
+	if not song or len(song) == 0:
+		return False
+	
+	if inputFile:
+		if type(inputFile) is str:
+			filename = inputFile
+		else:
+			filename = inputFile.name
+		filenameNoExt = os.path.splitext(inputFile.name)[0]
+		title = title or filenameNoExt
+		wave = wave or "SONG_{0}.wav".format(
+			filenameNoExt.split("_")[0].upper()
+		)
+		outputFile = outputFile or "{0}.osu".format(filenameNoExt)
+	else:
+		title = title or "Song Title"
+		wave = wave or "song.wav"
+	
+	if song["branches"] == True:
+		if selectedBranch not in branchNames:
+			selectedBranch = branchNames[-1]
+			debugPrint("Warning: Using the {0} branch in a branched song.".format(selectedBranch))
+	else:
+		selectedBranch = branchNames[0]
 	
 	osu = []
 	osu.append(b"""osu file format v14
 
 [General]""")
-	if not wave:
-		wave = "SONG_{0}.wav".format(filenameNoExt.split("_")[0].upper())
 	osu.append(b"AudioFilename: " + bytes(wave, "utf8"))
-	osu.append(b"""
-AudioLeadIn: 0
+	osu.append(b"""AudioLeadIn: 0
 PreviewTime: 0
 CountDown: 0
 SampleSet: Normal
@@ -128,13 +196,11 @@ GridSize: 4
 TimelineZoom: 1
 
 [Metadata]""")
-	if not title:
-		title = filenameNoExt
 	osu.append(b"Title:" + bytes(title, "utf8"))
 	osu.append(b"TitleUnicode:" + bytes(title, "utf8"))
-	osu.append(b"""Artist:
-ArtistUnicode:
-Creator:
+	osu.append(b"Artist:" + bytes(subtitle, "utf8"))
+	osu.append(b"ArtistUnicode:" + bytes(subtitle, "utf8"))
+	osu.append(b"""Creator:
 Version:
 Source:
 Tags:
@@ -148,22 +214,32 @@ SliderMultiplier:1.4
 SliderTickRate:4
 
 [TimingPoints]""")
-	for i in range(len(bars)):
-		prevBar = bars[i - 1] if i != 0 else None
-		bar = bars[i]
-		if i == 0 or prevBar["bpm"] != bar["bpm"] or prevBar["gogo"] != bar["gogo"] or prevBar["speed"] != bar["speed"]:
-			offset = bar["offset"] - globalOffset
-			if i == 0 or prevBar["bpm"] != bar["bpm"]:
-				msPerBeat = 1000.0 / bar["bpm"] * 60.0
-			elif prevBar["speed"] != bar["speed"]:
-				msPerBeat = -100 / bar["speed"]
-			else:
-				msPerBeat = -100
-			gogo = 1 if bar["gogo"] else 0
-			osu.append(bytes("{0},{1},4,1,0,100,1,{2}".format(int(offset), msPerBeat, gogo), "ansi"))
-	osu.append(b"")
-	osu.append(b"")
-	osu.append(b"[HitObjects]")
+	globalOffset = globalOffset * 1000.0
+	for i in range(song["length"]):
+		prevMeasure = song[i - 1] if i != 0 else None
+		prevBranch = prevMeasure[selectedBranch] if i != 0 else None
+		measure = song[i]
+		branch = measure[selectedBranch]
+		if i == 0 or prevMeasure["bpm"] != measure["bpm"] or prevMeasure["gogo"] != measure["gogo"] or prevBranch["speed"] != branch["speed"]:
+			offset = measure["offset"] - globalOffset
+			gogo = 1 if measure["gogo"] else 0
+			if i == 0 or prevMeasure["bpm"] != measure["bpm"]:
+				msPerBeat = 1000 / measure["bpm"] * 60
+				osu.append(bytes("{0},{1},4,1,0,100,1,{2}".format(
+					int(offset),
+					msPerBeat,
+					gogo
+				), "ansi"))
+			if branch["speed"] != 1 or i != 0 and (prevBranch["speed"] != branch["speed"] or prevMeasure["bpm"] == measure["bpm"]):
+				msPerBeat = -100 / branch["speed"]
+				osu.append(bytes("{0},{1},4,1,0,100,1,{2}".format(
+					int(offset),
+					msPerBeat,
+					gogo
+				), "ansi"))
+	osu.append(b"""
+
+[HitObjects]""")
 	osuSounds = {
 		"Don": 0,
 		"Ka": 8,
@@ -174,70 +250,144 @@ SliderTickRate:4
 		"Balloon": 0,
 		"Kusudama": 0
 	}
-	for bar in bars:
-		for i in range(bar["length"]):
-			note = bar[i]
-			type = note["type"]
-			offset = bar["offset"] + note["pos"] - globalOffset
-			if type == "Don" or type == "Ka" or type == "DON" or type == "KA":
-				sound = osuSounds[type]
-				osu.append(bytes("416,176,{0},1,{1},0:0:0:0:".format(int(offset), sound), "ansi"))
-			elif type == "Drumroll" or type == "DRUMROLL":
-				sound = 0 if type == "Drumroll" else 4
-				velocity = 1.4 * bar["speed"] / 5
-				pixelLength = note["length"] * velocity
-				osu.append(bytes("416,176,{0},2,{1},L|696:176,1,{2},0|0,0:0|0:0,0:0:0:0:".format(int(offset), sound, int(pixelLength)), "ansi"))
-			elif type == "Balloon" or type == "Kusudama":
-				sound = osuSounds[type]
-				endTime = offset + note["length"]
-				osu.append(bytes("416,176,{0},12,0,{1},0:0:0:0:".format(int(offset), int(endTime)), "ansi"))
+	for i in range(song["length"]):
+		measure = song[i]
+		branch = song[i][selectedBranch]
+		for j in range(branch["length"]):
+			note = branch[j]
+			noteType = note["type"]
+			offset = measure["offset"] + note["pos"] - globalOffset
+			if noteType == "Don" or noteType == "Ka" or noteType == "DON" or noteType == "KA":
+				sound = osuSounds[noteType]
+				osu.append(bytes("416,176,{0},1,{1},0:0:0:0:".format(
+					int(offset),
+					sound
+				), "ansi"))
+			elif noteType == "Drumroll" or noteType == "DRUMROLL":
+				sound = 0 if noteType == "Drumroll" else 4
+				velocity = 1.4 * branch["speed"] * 100 / (1000 / measure["bpm"] * 60)
+				pixelLength = note["duration"] * velocity
+				osu.append(bytes("416,176,{0},2,{1},L|696:176,1,{2},0|0,0:0|0:0,0:0:0:0:".format(
+					int(offset),
+					sound,
+					int(pixelLength)
+				), "ansi"))
+			elif noteType == "Balloon" or noteType == "Kusudama":
+				sound = osuSounds[noteType]
+				endTime = offset + note["duration"]
+				osu.append(bytes("416,176,{0},12,0,{1},0:0:0:0:".format(
+					int(offset),
+					int(endTime)
+				), "ansi"))
 	osu.append(b"")
+	osuContents = b"\n".join(osu)
 	
-	with open("{0}.osu".format(filenameNoExt), "bw+") as file:
-		file.write(b"\n".join(osu))
-
-def readByte(file, seek, length, type=None):
-	file.seek(seek)
-	bytes = file.read(length)
-	if type == "int":
-		return int.from_bytes(bytes, byteorder="big")
-	elif type == "float":
-		return struct.unpack(">f", bytes)[0]
-	return bytes
+	if outputFile:
+		if type(outputFile) is str:
+			file = open(outputFile, "bw+")
+		else:
+			file = outputFile
+		if type(outputFile) is io.TextIOWrapper:
+			osuContents = osuContents.decode("utf-8")
+		try:
+			file.write(osuContents)
+		except UnicodeEncodeError as e:
+			print(e)
+		file.close()
+		return True
+	else:
+		return osuContents
 
 def shortHex(number):
 	return hex(number)[2:]
 
-def nameValue(list):
+def getBool(number):
+	return True if number == 0x1 else False if number == 0x0 else number
+
+def nameValue(*lists):
 	string = []
-	for name in list:
-		if name == "type":
-			string.append(list[name])
-		else:
-			string.append("{0}: {1}".format(name, list[name]))
+	for list in lists:
+		for name in list:
+			if name == "type":
+				string.append(list[name])
+			elif name != "length" and type(name) is not int:
+				value = list[name]
+				if type(value) == float and value % 1 == 0.0:
+					value = int(value)
+				string.append("{0}: {1}".format(name, value))
 	return ", ".join(string)
 
+def debugPrint(*args, **kwargs):
+	print(*args, file=sys.stderr, **kwargs)
+
 if __name__=="__main__":
+	parser = argparse.ArgumentParser(
+		description="fumen2osu {0}".format(fumen2osu_version)
+	)
+	parser.add_argument(
+		"file_m.bin",
+		help="Path to a Taiko no Tatsujin fumen file.",
+		type=argparse.FileType("rb")
+	)
+	parser.add_argument(
+		"offset",
+		help="Note offset in seconds, negative values will make the notes appear later. Example: -1.9",
+		nargs="?",
+		type=float,
+		default=0
+	)
+	group = parser.add_mutually_exclusive_group()
+	group.add_argument(
+		"--big",
+		help="Force big endian byte order for parsing.",
+		action="store_const",
+		dest="order",
+		const="big"
+	)
+	group.add_argument(
+		"--little",
+		help="Force little endian byte order for parsing.",
+		action="store_const",
+		dest="order",
+		const="little"
+	)
+	parser.add_argument(
+		"-o",
+		metavar="file.osu",
+		help="Set the filename of the output file.",
+		type=argparse.FileType("bw+")
+	)
+	parser.add_argument(
+		"--title",
+		metavar="\"Title\"",
+		help="Set the title in the output file."
+	)
+	parser.add_argument(
+		"--subtitle",
+		metavar="\"Subtitle\"",
+		help="Set the subtitle (artist field) in the output file.",
+		default=""
+	)
+	parser.add_argument(
+		"--wave",
+		metavar="file.wav",
+		help="Set the audio filename in the output file."
+	)
+	parser.add_argument(
+		"--branch",
+		metavar="master",
+		help="Select a branch from a branched song ({0}).".format(", ".join(branchNames)),
+		choices=branchNames
+	)
+	parser.add_argument(
+		"-v", "--debug",
+		help="Print verbose debug information.",
+		action="store_true"
+	)
 	if len(sys.argv) == 1:
-		print(usage.format(fumen2osu_version, sys.argv[0]))
+		parser.print_help()
 	else:
-		args = sys.argv[1:]
-		kwargs = {}
-		flags = {
-			"title": "string",
-			"wave": "string",
-			"debug": "bool"
-		}
-		argsLen = len(args)
-		for i in range(argsLen):
-			index = argsLen - i - 1
-			arg = args[index]
-			if arg[:1] == "/":
-				flag = arg[1:]
-				if flag in flags:
-					if flags[flag] == "string" and index < argsLen - 1:
-						kwargs[flag] = args.pop(index + 1)
-					elif flags[flag] == "bool":
-						kwargs[flag] = True
-				args.pop(index)
-		readFumen(*args[:2], **kwargs)
+		args = parser.parse_args()
+		inputFile = getattr(args, "file_m.bin")
+		song = readFumen(inputFile, args.order, args.debug)
+		writeOsu(song, args.offset, args.title, args.subtitle, args.wave, args.branch, args.o, inputFile)
