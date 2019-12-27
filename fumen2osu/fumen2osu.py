@@ -1,6 +1,6 @@
 import os, sys, struct, argparse, io
 
-fumen2osu_version = "v1.1"
+fumen2osu_version = "v1.2"
 
 branchNames = ("normal", "advanced", "master")
 
@@ -28,7 +28,6 @@ def readFumen(inputFile, byteOrder=None, debug=False):
 		0x62: "Drumroll" # ?
 	}
 	song = {}
-	songOffset = 0
 	
 	def readStruct(format, seek=None):
 		if seek:
@@ -64,9 +63,12 @@ def readFumen(inputFile, byteOrder=None, debug=False):
 		# measureStruct: bpm 4, offset 4, gogo 1, hidden 1, dummy 2, branchInfo 4 * 6, dummy 4
 		measureStruct = readStruct("ffBBHiiiiiii")
 		measure["bpm"] = measureStruct[0]
-		if not songOffset:
-			songOffset = 240000 / measure["bpm"]
-		measure["offset"] = measureStruct[1] + songOffset
+		measure["fumenOffset"] = measureStruct[1]
+		if measureNumber == 0:
+			measure["offset"] = measure["fumenOffset"] + 240000 / measure["bpm"]
+		else:
+			prev = song[measureNumber - 1]
+			measure["offset"] = prev["offset"] + measure["fumenOffset"] + 240000 / measure["bpm"] - prev["fumenOffset"] - 240000 / prev["bpm"]
 		measure["gogo"] = getBool(measureStruct[2])
 		measure["hidden"] = getBool(measureStruct[3])
 		
