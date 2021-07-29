@@ -1,25 +1,17 @@
+#!/usr/bin/env python3
+
 import os
 
-lyrics2vtt_version = "v1.0"
+lyrics2vtt_version = "v1.1"
 
 def readDrp(inputFile):
-	import subprocess
+	import drpextract
 	import xml.etree.ElementTree as ET
 	
-	if type(inputFile) is str:
-		fileName = inputFile
-	else:
-		fileName = inputFile.name
-		inputFile.close()
-	
-	subprocess.check_output(("DRPExtractor.exe", fileName))
-	
-	filenameNoExt = os.path.splitext(fileName)[0]
-	xmlPath = os.path.join(filenameNoExt, filenameNoExt)
-	tree = ET.parse(xmlPath)
-	
-	os.remove(xmlPath)
-	os.rmdir(filenameNoExt)
+	for outFile in drpextract.extractFile(inputFile):
+		xmlContent = outFile["data"]
+		break
+	tree = ET.ElementTree(ET.fromstring(xmlContent))
 	
 	lyrics = []
 	root = tree.getroot()
@@ -102,7 +94,7 @@ def readBin(inputFile):
 	file.close()
 	return lyrics
 
-def writeVtt(lyrics, outputFile, inputFile):
+def writeVtt(lyrics, outputFile=None, inputFile=None):
 	import io
 	
 	if not lyrics or len(lyrics) == 0:
@@ -141,12 +133,10 @@ def writeVtt(lyrics, outputFile, inputFile):
 		else:
 			file = outputFile
 		if type(outputFile) is io.TextIOWrapper:
-			vttContents = vttContents.decode("utf-8", "ignore")
-		try:
+			sys.stdout.buffer.write(vttContents)
+		else:
 			file.write(vttContents)
-		except UnicodeEncodeError as e:
-			print(e)
-		file.close()
+			file.close()
 		return True
 	else:
 		return vttContents
