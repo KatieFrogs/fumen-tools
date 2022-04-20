@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+*.tja
+*.osu
+*.bin
+*.cbin
+*.drp
+*.vtt
