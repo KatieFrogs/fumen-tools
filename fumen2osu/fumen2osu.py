@@ -1,6 +1,6 @@
 import os, sys, struct, argparse, io
 
-fumen2osu_version = "v1.2"
+fumen2osu_version = "v1.3"
 
 branchNames = ("normal", "advanced", "master")
 
@@ -160,7 +160,7 @@ def writeOsu(song, globalOffset=0, title=None, subtitle="", wave=None, selectedB
 			filename = inputFile
 		else:
 			filename = inputFile.name
-		filenameNoExt = os.path.splitext(inputFile.name)[0]
+		filenameNoExt = os.path.splitext(filename)[0]
 		title = title or filenameNoExt
 		wave = wave or "SONG_{0}.wav".format(
 			filenameNoExt.split("_")[0].upper()
@@ -266,7 +266,7 @@ SliderTickRate:4
 					sound
 				), "ansi"))
 			elif noteType == "Drumroll" or noteType == "DRUMROLL":
-				sound = 0 if noteType == "Drumroll" else 4
+				sound = osuSounds[noteType]
 				velocity = 1.4 * branch["speed"] * 100 / (1000 / measure["bpm"] * 60)
 				pixelLength = note["duration"] * velocity
 				osu.append(bytes("416,176,{0},2,{1},L|696:176,1,{2},0|0,0:0|0:0,0:0:0:0:".format(
