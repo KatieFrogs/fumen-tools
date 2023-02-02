@@ -4,6 +4,9 @@ Tools for Taiko no Tatsujin files
 ### fumen2osu
 Converts .bin fumen files to .osu
 
+### konga2tja
+Converts Donkey Konga 1 .bin files to .tja
+
 ### lyrics2vtt
 Converts .bin, .cbin, and .drp lyrics files to .vtt
 
