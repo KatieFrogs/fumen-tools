@@ -1,6 +1,6 @@
 import os, sys, struct, argparse, io
 
-fumen2osu_version = "v1.3"
+fumen2osu_version = "v1.4"
 
 branchNames = ("normal", "advanced", "master")
 
@@ -231,14 +231,14 @@ SliderTickRate:4
 					int(offset),
 					msPerBeat,
 					gogo
-				), "ansi"))
+				), "ascii"))
 			if branch["speed"] != 1 or i != 0 and (prevBranch["speed"] != branch["speed"] or prevMeasure["bpm"] == measure["bpm"]):
 				msPerBeat = -100 / branch["speed"]
 				osu.append(bytes("{0},{1},4,1,0,100,1,{2}".format(
 					int(offset),
 					msPerBeat,
 					gogo
-				), "ansi"))
+				), "ascii"))
 	osu.append(b"""
 
 [HitObjects]""")
@@ -264,7 +264,7 @@ SliderTickRate:4
 				osu.append(bytes("416,176,{0},1,{1},0:0:0:0:".format(
 					int(offset),
 					sound
-				), "ansi"))
+				), "ascii"))
 			elif noteType == "Drumroll" or noteType == "DRUMROLL":
 				sound = osuSounds[noteType]
 				velocity = 1.4 * branch["speed"] * 100 / (1000 / measure["bpm"] * 60)
@@ -273,14 +273,14 @@ SliderTickRate:4
 					int(offset),
 					sound,
 					int(pixelLength)
-				), "ansi"))
+				), "ascii"))
 			elif noteType == "Balloon" or noteType == "Kusudama":
 				sound = osuSounds[noteType]
 				endTime = offset + note["duration"]
 				osu.append(bytes("416,176,{0},12,0,{1},0:0:0:0:".format(
 					int(offset),
 					int(endTime)
-				), "ansi"))
+				), "ascii"))
 	osu.append(b"")
 	osuContents = b"\n".join(osu)
 	
