@@ -5,7 +5,7 @@ import glob
 import math
 from functools import cmp_to_key
 
-konga2tja_version = "v1.0"
+konga2tja_version = "v1.1"
 
 noteTypes = {
 	0x00: "0",
@@ -300,7 +300,7 @@ if __name__ == "__main__":
 					"WAVE:{}.ogg".format(name),
 					"OFFSET:-0",
 					"DEMOSTART:0",
-					"GAME:Konga",
+					"GAME:Bongo",
 					""
 				]
 				bpm = None
